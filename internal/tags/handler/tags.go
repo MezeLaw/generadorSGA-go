@@ -14,6 +14,10 @@ type Handler struct {
 	service TagsService
 }
 
+type Request struct {
+	Code string `json:"code"`
+}
+
 func New(service TagsService) Handler {
 	return Handler{service: service}
 }
@@ -26,8 +30,4 @@ func (h *Handler) GetTags(ctx context.Context) (*[]models.Element, error) {
 	}
 
 	return elements, nil
-}
-
-func (h *Handler) getTagByCode(ctx context.Context, code string) (*models.Element, error) {
-	return nil, nil
 }
