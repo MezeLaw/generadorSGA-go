@@ -1,6 +1,13 @@
 package repository
 
-import "generadorSGA-go/internal/models"
+import (
+	"errors"
+	"generadorSGA-go/internal/models"
+)
+
+var (
+	ErrElementNotFound = errors.New("element not found")
+)
 
 type Repository struct {
 	elements map[string]string
@@ -11,9 +18,9 @@ func New() Repository {
 	return Repository{elements: elements}
 }
 
-func (r *Repository) GetElements() *[]models.Element {
+func (r *Repository) GetElements() []models.Element {
 
-	elements := []models.Element{}
+	elements := make([]models.Element, 0, len(r.elements))
 
 	for code, description := range r.elements {
 		element := models.Element{
@@ -23,7 +30,19 @@ func (r *Repository) GetElements() *[]models.Element {
 		elements = append(elements, element)
 	}
 
-	return &elements
+	return elements
+}
+
+func (r *Repository) GetElementByCode(code string) (*models.Element, error) {
+	description, exists := r.elements[code]
+	if !exists {
+		return nil, ErrElementNotFound
+	}
+
+	return &models.Element{
+		Code:        code,
+		Description: description,
+	}, nil
 }
 
 func fillElementsDic() map[string]string {
