@@ -1,180 +1,365 @@
 package service
 
 import (
+	"errors"
 	"generadorSGA-go/internal/models"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
-// Mock repository for testing
-type mockRepository struct {
-	elements map[string]string
-}
-
-func newMockRepository() *mockRepository {
-	return &mockRepository{
-		elements: map[string]string{
-			"cleanAlPlus":     "Clean Al Plus",
-			"fountGreenSF":    "Fount Green SF",
-			"reveladorPositivo": "Revelador Positivo",
-		},
-	}
-}
-
-func (m *mockRepository) GetElements() []models.Element {
-	elements := make([]models.Element, 0, len(m.elements))
-	for code, description := range m.elements {
-		elements = append(elements, models.Element{
-			Code:        code,
-			Description: description,
-		})
-	}
-	return elements
-}
-
-func (m *mockRepository) GetElementByCode(code string) (*models.Element, error) {
-	description, exists := m.elements[code]
-	if !exists {
-		return nil, ErrElementNotFound
-	}
-	return &models.Element{
-		Code:        code,
-		Description: description,
-	}, nil
-}
-
-func TestGetElements(t *testing.T) {
-	repo := newMockRepository()
-	service := New(repo)
-
-	elements, err := service.GetElements()
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
-
-	if len(elements) != 3 {
-		t.Errorf("Expected 3 elements, got %d", len(elements))
-	}
-
-	// Verify elements are sorted by description
-	if len(elements) > 1 {
-		for i := 0; i < len(elements)-1; i++ {
-			if elements[i].Description > elements[i+1].Description {
-				t.Errorf("Elements not sorted: %s comes after %s", elements[i].Description, elements[i+1].Description)
-			}
-		}
-	}
-}
-
-func TestGetElementByCode(t *testing.T) {
-	repo := newMockRepository()
-	service := New(repo)
-
+func TestService_GetElements(t *testing.T) {
 	tests := []struct {
-		name        string
-		code        string
-		expectError bool
-		expectDesc  string
+		name     string
+		behavior func(m *MockTagRepository)
+		asserts  func(t *testing.T, elements []models.Element, err error)
 	}{
 		{
-			name:        "Valid code",
-			code:        "cleanAlPlus",
-			expectError: false,
-			expectDesc:  "Clean Al Plus",
+			name: "should return sorted elements from repository",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "code3", Description: "Zebra Description"},
+					{Code: "code1", Description: "Alpha Description"},
+					{Code: "code2", Description: "Beta Description"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.NoError(t, err)
+				assert.NotNil(t, elements)
+				assert.Equal(t, 3, len(elements))
+				// Verify sorting by description
+				assert.Equal(t, "Alpha Description", elements[0].Description)
+				assert.Equal(t, "Beta Description", elements[1].Description)
+				assert.Equal(t, "Zebra Description", elements[2].Description)
+			},
 		},
 		{
-			name:        "Invalid code",
-			code:        "nonexistent",
-			expectError: true,
+			name: "should return error when repository is empty",
+			behavior: func(m *MockTagRepository) {
+				m.On("GetElements").Return([]models.Element{})
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.Error(t, err)
+				assert.Equal(t, ErrNoElementsFound, err)
+				assert.Nil(t, elements)
+			},
 		},
 		{
-			name:        "Empty code",
-			code:        "",
-			expectError: true,
+			name: "should sort case-insensitively",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "code1", Description: "apple"},
+					{Code: "code2", Description: "Banana"},
+					{Code: "code3", Description: "cherry"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, 3, len(elements))
+				assert.Equal(t, "apple", elements[0].Description)
+				assert.Equal(t, "Banana", elements[1].Description)
+				assert.Equal(t, "cherry", elements[2].Description)
+			},
+		},
+		{
+			name: "should handle single element",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "code1", Description: "Single Description"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(elements))
+				assert.Equal(t, "Single Description", elements[0].Description)
+			},
+		},
+		{
+			name: "should maintain element integrity while sorting",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "code2", Description: "Zebra"},
+					{Code: "code1", Description: "Alpha"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.NoError(t, err)
+				// Verify code-description pairing is maintained
+				for _, elem := range elements {
+					if elem.Description == "Alpha" {
+						assert.Equal(t, "code1", elem.Code)
+					}
+					if elem.Description == "Zebra" {
+						assert.Equal(t, "code2", elem.Code)
+					}
+				}
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := new(MockTagRepository)
+			tt.behavior(mockRepo)
+
+			service := New(mockRepo)
+			elements, err := service.GetElements()
+
+			tt.asserts(t, elements, err)
+			mockRepo.AssertExpectations(t)
+		})
+	}
+}
+
+func TestService_GetElementByCode(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     string
+		behavior func(m *MockTagRepository, code string)
+		asserts  func(t *testing.T, element *models.Element, err error)
+	}{
+		{
+			name: "should return element when code exists",
+			code: "validCode",
+			behavior: func(m *MockTagRepository, code string) {
+				element := &models.Element{
+					Code:        "validCode",
+					Description: "Valid Description",
+				}
+				m.On("GetElementByCode", code).Return(element, nil)
+			},
+			asserts: func(t *testing.T, element *models.Element, err error) {
+				assert.NoError(t, err)
+				assert.NotNil(t, element)
+				assert.Equal(t, "validCode", element.Code)
+				assert.Equal(t, "Valid Description", element.Description)
+			},
+		},
+		{
+			name: "should return error when code is empty",
+			code: "",
+			behavior: func(m *MockTagRepository, code string) {
+				// Repository should not be called for empty code
+			},
+			asserts: func(t *testing.T, element *models.Element, err error) {
+				assert.Error(t, err)
+				assert.Nil(t, element)
+				assert.Contains(t, err.Error(), "code cannot be empty")
+			},
+		},
+		{
+			name: "should return error when code does not exist",
+			code: "nonExistentCode",
+			behavior: func(m *MockTagRepository, code string) {
+				m.On("GetElementByCode", code).Return((*models.Element)(nil), ErrElementNotFound)
+			},
+			asserts: func(t *testing.T, element *models.Element, err error) {
+				assert.Error(t, err)
+				assert.Nil(t, element)
+				assert.Equal(t, ErrElementNotFound, err)
+			},
+		},
+		{
+			name: "should propagate repository errors",
+			code: "errorCode",
+			behavior: func(m *MockTagRepository, code string) {
+				m.On("GetElementByCode", code).Return((*models.Element)(nil), errors.New("repository error"))
+			},
+			asserts: func(t *testing.T, element *models.Element, err error) {
+				assert.Error(t, err)
+				assert.Nil(t, element)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := new(MockTagRepository)
+			tt.behavior(mockRepo, tt.code)
+
+			service := New(mockRepo)
 			element, err := service.GetElementByCode(tt.code)
 
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error but got none")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Expected no error, got %v", err)
-				}
-				if element.Description != tt.expectDesc {
-					t.Errorf("Expected description %s, got %s", tt.expectDesc, element.Description)
-				}
-			}
+			tt.asserts(t, element, err)
+			mockRepo.AssertExpectations(t)
 		})
 	}
 }
 
-func TestSearchElements(t *testing.T) {
-	repo := newMockRepository()
-	service := New(repo)
-
+func TestService_SearchElements(t *testing.T) {
 	tests := []struct {
-		name          string
-		query         string
-		expectError   bool
-		expectedCount int
+		name     string
+		query    string
+		behavior func(m *MockTagRepository)
+		asserts  func(t *testing.T, elements []models.Element, err error)
 	}{
 		{
-			name:          "Search by partial description",
-			query:         "Clean",
-			expectError:   false,
-			expectedCount: 1,
+			name:  "should return all elements when query is empty",
+			query: "",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "code1", Description: "Description 1"},
+					{Code: "code2", Description: "Description 2"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, 2, len(elements))
+			},
 		},
 		{
-			name:          "Search by code",
-			query:         "fount",
-			expectError:   false,
-			expectedCount: 1,
+			name:  "should filter by code case-insensitive",
+			query: "CLEAN",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "cleanAlPlus", Description: "Clean Al Plus"},
+					{Code: "fountGreenSF", Description: "Fount Green SF"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(elements))
+				assert.Equal(t, "cleanAlPlus", elements[0].Code)
+			},
 		},
 		{
-			name:          "No results",
-			query:         "nonexistent",
-			expectError:   true,
-			expectedCount: 0,
+			name:  "should filter by description case-insensitive",
+			query: "green",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "cleanAlPlus", Description: "Clean Al Plus"},
+					{Code: "fountGreenSF", Description: "Fount Green SF"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(elements))
+				assert.Equal(t, "Fount Green SF", elements[0].Description)
+			},
 		},
 		{
-			name:          "Empty query returns all",
-			query:         "",
-			expectError:   false,
-			expectedCount: 3,
+			name:  "should return error when no matches found",
+			query: "nonexistent",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "code1", Description: "Description 1"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.Error(t, err)
+				assert.Equal(t, ErrNoElementsFound, err)
+				assert.Nil(t, elements)
+			},
+		},
+		{
+			name:  "should return multiple matches",
+			query: "limpiador",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "limpiador1", Description: "Limpiador Profundo"},
+					{Code: "limpiador2", Description: "Limpiador Plus"},
+					{Code: "other", Description: "Other Product"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, 2, len(elements))
+			},
+		},
+		{
+			name:  "should handle partial matches",
+			query: "Al",
+			behavior: func(m *MockTagRepository) {
+				elements := []models.Element{
+					{Code: "cleanAlPlus", Description: "Clean Al Plus"},
+					{Code: "fountGreenSF", Description: "Fount Green SF"},
+				}
+				m.On("GetElements").Return(elements)
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(elements))
+				assert.Contains(t, elements[0].Code, "Al")
+			},
+		},
+		{
+			name:  "should propagate error from GetElements",
+			query: "test",
+			behavior: func(m *MockTagRepository) {
+				m.On("GetElements").Return([]models.Element{})
+			},
+			asserts: func(t *testing.T, elements []models.Element, err error) {
+				assert.Error(t, err)
+				assert.Equal(t, ErrNoElementsFound, err)
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := new(MockTagRepository)
+			tt.behavior(mockRepo)
+
+			service := New(mockRepo)
 			elements, err := service.SearchElements(tt.query)
 
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error but got none")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Expected no error, got %v", err)
-				}
-				if len(elements) != tt.expectedCount {
-					t.Errorf("Expected %d elements, got %d", tt.expectedCount, len(elements))
-				}
-			}
+			tt.asserts(t, elements, err)
+			mockRepo.AssertExpectations(t)
 		})
 	}
 }
 
-func TestGetElementsEmptyRepository(t *testing.T) {
-	emptyRepo := &mockRepository{elements: map[string]string{}}
-	service := New(emptyRepo)
-
-	_, err := service.GetElements()
-	if err != ErrNoElementsFound {
-		t.Errorf("Expected ErrNoElementsFound, got %v", err)
+func TestService_New(t *testing.T) {
+	tests := []struct {
+		name     string
+		behavior func() TagRepository
+		asserts  func(t *testing.T, service Service)
+	}{
+		{
+			name: "should create service with repository",
+			behavior: func() TagRepository {
+				return new(MockTagRepository)
+			},
+			asserts: func(t *testing.T, service Service) {
+				assert.NotNil(t, service)
+				assert.NotNil(t, service.repository)
+			},
+		},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := tt.behavior()
+			service := New(repo)
+			tt.asserts(t, service)
+		})
+	}
+}
+
+// MockTagRepository is a mock implementation of TagRepository interface
+type MockTagRepository struct {
+	mock.Mock
+}
+
+func (m *MockTagRepository) GetElements() []models.Element {
+	args := m.Called()
+	return args.Get(0).([]models.Element)
+}
+
+func (m *MockTagRepository) GetElementByCode(code string) (*models.Element, error) {
+	args := m.Called(code)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.Element), args.Error(1)
 }
