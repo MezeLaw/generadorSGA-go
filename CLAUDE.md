@@ -30,12 +30,20 @@ Each layer defines interfaces for its dependencies and receives them via constru
 
 ### Build
 ```bash
+# Build getTags Lambda
 go build -o bin/getTags cmd/tags/getTags/main.go
+
+# Build getTagById Lambda
+go build -o bin/getTagById cmd/tags/getTagById/main.go
 ```
 
 ### Run locally
 ```bash
+# Run getTags Lambda
 go run cmd/tags/getTags/main.go
+
+# Run getTagById Lambda
+go run cmd/tags/getTagById/main.go
 ```
 
 ### Test
@@ -62,6 +70,7 @@ go mod tidy
 
 Each Lambda function is in its own subdirectory under `cmd/tags/`:
 - `getTags/main.go` - Retrieves all element tags from the repository
+- `getTagById/main.go` - Retrieves a specific tag by its ID (code)
 
 ## Adding New Features
 
